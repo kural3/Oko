@@ -1,0 +1,29 @@
+*.iml
+.gradle
+.kotlin
+/local.properties
+local.properties
+/.idea
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+
+# Build output and the installer folder made from it
+/dist/
+/Oko-Setup/
+/Camera2PC-Setup/
+*.apk
+
+# The first Python version, replaced by desktop/
+/pc/
+
+# Release signing (never commit)
+*.jks
+*.keystore
+keystore.properties
+
+# JVM crash logs (contain local paths)
+hs_err_pid*.log
+replay_pid*.log
