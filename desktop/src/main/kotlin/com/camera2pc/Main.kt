@@ -45,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +69,7 @@ import com.camera2pc.ui.components.StatusPill
 import com.camera2pc.ui.components.Tile
 import com.camera2pc.ui.components.TileShape
 import com.camera2pc.ui.theme.Camera2PCTheme
+import kotlinx.coroutines.launch
 
 private enum class Page { Home, Camera, Settings }
 
@@ -76,13 +78,17 @@ fun main() = application {
     val engine = remember { StreamEngine(settings) }
     val state = rememberWindowState(size = DpSize(1200.dp, 800.dp), position = WindowPosition(Alignment.Center))
     val close = {
-        engine.stop()
+        engine.shutdown()
         settings.save()
         exitApplication()
     }
     LaunchedEffect(Unit) {
         if (System.getenv("OKO_DEMO") == "1") engine.startDemo()
         else if (settings.autostart && (settings.mode == Mode.Usb || settings.host.isNotBlank())) engine.start()
+    }
+    LaunchedEffect(Unit) {
+        Log.i("Oko ${Updates.current} запущен")
+        if (settings.checkUpdates && System.getenv("OKO_DEMO") != "1") Updates.check()
     }
     Window(
         onCloseRequest = close,
@@ -157,7 +163,16 @@ private fun Rail(page: Page, onSelect: (Page) -> Unit) {
         RailItem(CamIcons.Home, "Главная", page == Page.Home) { onSelect(Page.Home) }
         RailItem(CamIcons.Tune, "Настройки камеры", page == Page.Camera) { onSelect(Page.Camera) }
         Spacer(Modifier.weight(1f))
-        RailItem(CamIcons.Settings, "Настройки", page == Page.Settings) { onSelect(Page.Settings) }
+        Box {
+            RailItem(CamIcons.Settings, "Настройки", page == Page.Settings) { onSelect(Page.Settings) }
+            // вышла новая версия — точка на «Настройках»
+            if (Updates.available != null) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp).size(10.dp)
+                        .clip(CircleShape).background(colors.error)
+                )
+            }
+        }
     }
 }
 
@@ -448,6 +463,31 @@ private fun SettingsPage(engine: StreamEngine) {
                 shape = CircleShape,
                 modifier = Modifier.width(110.dp),
             )
+        }
+        val update = Updates.available
+        SettingRow(
+            CamIcons.Refresh,
+            if (update != null) "Доступна версия ${update.version}" else "Обновления",
+            "Сейчас установлена ${Updates.current}." +
+                (if (Updates.status.isNotEmpty() && update == null) " ${Updates.status}." else "") +
+                " Раз в запуск Oko смотрит на GitHub, не вышла ли новая.",
+        ) {
+            val scope = rememberCoroutineScope()
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (update != null) {
+                    Button(onClick = { Updates.openPage() }, shapes = ButtonDefaults.shapes()) { Text("Скачать") }
+                } else {
+                    FilledTonalButton(
+                        onClick = { scope.launch { Updates.check() } },
+                        enabled = !Updates.checking,
+                        shapes = ButtonDefaults.shapes(),
+                    ) { Text(if (Updates.checking) "Проверяю…" else "Проверить") }
+                }
+                Switch(checked = s.checkUpdates, onCheckedChange = { s.checkUpdates = it; s.save() })
+            }
+        }
+        SettingRow(CamIcons.Info, "Журнал", "Что делал adb и почему не было связи. Пригодится, если что-то не работает") {
+            FilledTonalButton(onClick = { Log.reveal() }, shapes = ButtonDefaults.shapes()) { Text("Открыть") }
         }
         Spacer(Modifier.height(6.dp))
         Tile(

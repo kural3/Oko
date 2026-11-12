@@ -81,8 +81,9 @@
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
-    <!-- запущенный Oko закрываем, чтобы файлы не были заняты -->
-    <util:CloseApplication Id="CloseOko" Target="Oko.exe" CloseMessage="yes" TerminateProcess="0" RebootPrompt="no" />
+    <!-- запущенный Oko завершаем, чтобы файлы не были заняты. Без WM_CLOSE: лаунчер jpackage на него
+         падает с «GetMessage() failed. System error [1400]». -->
+    <util:CloseApplication Id="CloseOko" Target="Oko.exe" CloseMessage="no" TerminateProcess="0" RebootPrompt="no" />
 
     <!-- Камера. Отложенные действия от имени системы: регистрация пишет в HKLM. -->
     <CustomAction Id="PreClean_Set" Property="PreClean"
@@ -97,7 +98,15 @@
                   Value="&quot;[System64Folder]cmd.exe&quot; /s /c &quot;&quot;[INSTALLFOLDER]vcamctl.exe&quot; uninstall &quot;[INSTALLFOLDER]Camera2PCCam.dll&quot; &amp; &quot;[System64Folder]net.exe&quot; stop FrameServer /y&quot;" />
     <CustomAction Id="UnregisterCam" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="ignore" />
 
+    <!-- Сервер adb (app\resources\platform-tools) живёт и после закрытия Oko и держит adb.exe:
+         перед заменой и удалением файлов останавливаем его. Нет файла — не беда. -->
+    <CustomAction Id="StopAdb_Set" Property="StopAdb"
+                  Value="&quot;[INSTALLFOLDER]app\resources\platform-tools\adb.exe&quot; kill-server" />
+    <CustomAction Id="StopAdb" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="ignore" />
+
     <InstallExecuteSequence>
+      <Custom Action="StopAdb_Set" Before="StopAdb">1</Custom>
+      <Custom Action="StopAdb" Before="RemoveFiles">1</Custom>
       <Custom Action="UnregisterCam_Set" Before="UnregisterCam">REMOVE~="ALL"</Custom>
       <Custom Action="UnregisterCam" Before="RemoveFiles">REMOVE~="ALL"</Custom>
       <Custom Action="PreClean_Set" Before="PreClean">NOT Installed AND NOT REMOVE</Custom>

@@ -24,7 +24,7 @@ The interface is in Russian for now.
 
 ## Connecting
 
-- **ADB** (recommended). Works over the phone's wireless debugging or a cable, and through a VPN on the phone. The phone app has a step-by-step guide; pairing is done once, from the PC app ("Подключить новый телефон по коду"), no command line. When a cable is plugged in, Oko moves to it by itself.
+- **ADB** (recommended). Works over the phone's wireless debugging or a cable, and through a VPN on the phone. adb comes with Oko (Google platform-tools), nothing else to install. The phone app has a step-by-step guide; pairing is done once, from the PC app ("Подключить новый телефон по коду"), no command line. When a cable is plugged in, Oko moves to it by itself.
 - **Wi-Fi**. Type in the IP the phone shows. A VPN on the phone blocks this; use ADB then.
 
 ## A look around
@@ -43,6 +43,8 @@ The interface is in Russian for now.
 - The picture turns with the phone: hold it upright for a vertical video
 
 **On the PC**
+- adb is built in; the error says what is wrong: debugging not allowed on the phone, the device stuck offline (Oko reconnects it first), or no Windows driver for the phone's ADB interface
+- Checks GitHub for a new version once per launch (can be turned off in Settings)
 - Every phone setting above, live, with the values the camera picked itself shown beside them
 - Rotate, mirror, flip, "fill 16:9" instead of black bars, brightness, contrast, saturation
 - The phone's battery and temperature
@@ -57,7 +59,9 @@ The interface is in Russian for now.
 ## Where things live on Windows
 
 - The app, the camera DLL and `vcamctl.exe`: `C:\Program Files\Oko`
+- adb (Google platform-tools 37.0.1): `C:\Program Files\Oko\app\resources\platform-tools`. Oko uses the usual adb server, so Android Studio and scrcpy keep working alongside it; when Oko started the server itself, it stops it on exit
 - Settings: `%APPDATA%\Camera2PC\settings.properties`
+- The log (what adb answered, why there was no connection): `%APPDATA%\Camera2PC\log.txt`, or Settings → «Журнал»
 - `vcamctl list` lists the cameras Windows sees; `vcamctl test` reads a few frames from Oko Camera
 
 ## Build
@@ -80,6 +84,8 @@ One Gradle build for both apps. Any JDK starts Gradle; the JDK 25 it builds with
 sh driver/build.sh                        # Camera2PCCam.dll and vcamctl.exe, in dist/
 sh installer/build.sh                     # dist/Oko-<version>.msi (downloads WiX 3.11 if missing)
 ```
+
+A tag like `v1.1` builds both on GitHub Actions (`.github/workflows/release.yml`) and puts them into a draft release.
 
 The icon is drawn by `desktop/icons/Icon.java` (every PNG and the .ico); the Android adaptive icon is the same mark in vectors.
 

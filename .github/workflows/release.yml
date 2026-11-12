@@ -1,0 +1,103 @@
+# Builds Oko-<version>.apk and Oko-<version>.msi for a tag like v1.1 and puts them into a draft
+# release with that tag: write the notes and publish it by hand. If the release already exists
+# (made by hand), it is not touched; the files are still kept as the run's artifacts.
+#
+# The APK is signed with the same debug key as the local builds, so it installs over them. Put the key
+# into the repository secret DEBUG_KEYSTORE_BASE64 once:
+#   base64 -w0 ~/.android/debug.keystore | gh secret set DEBUG_KEYSTORE_BASE64
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "::warning::No DEBUG_KEYSTORE_BASE64 secret: the APK gets a new key and will not install over an older Oko"
+          else
+            mkdir -p ~/.android && echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore
+          fi
+      - run: chmod +x gradlew && ./gradlew :phone:assembleRelease --console=plain
+      - name: Name the APK
+        run: |
+          VERSION=$(sed -n 's/.*versionName = "\(.*\)"/\1/p' phone/build.gradle.kts)
+          mkdir out && cp phone/build/outputs/apk/release/*.apk "out/Oko-$VERSION.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: out/*.apk
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      # the same JetBrains Runtime the app is built with locally (own title bar), and the C++ compiler
+      JBR_URL: https://cache-redirector.jetbrains.com/intellij-jbr/jbr-25.0.4.1-windows-x64-b329.142.zip
+      LLVM_MINGW_URL: https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-x86_64.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: JetBrains Runtime
+        run: |
+          curl -sSL -o /c/jbr.zip "$JBR_URL"
+          unzip -q /c/jbr.zip -d /c/jbr
+          JBR=$(ls -d /c/jbr/*/ | head -1)
+          echo "jbr.dir=$(cygpath -m "$JBR")" > local.properties
+          cat local.properties
+      - name: llvm-mingw
+        run: |
+          curl -sSL -o /c/llvm-mingw.zip "$LLVM_MINGW_URL"
+          unzip -q /c/llvm-mingw.zip -d /c/llvm-mingw
+          echo "$(cygpath -w "$(ls -d /c/llvm-mingw/*/ | head -1)bin")" >> "$GITHUB_PATH"
+      - run: sh driver/build.sh
+      - run: ./gradlew :desktop:createDistributable --console=plain
+      - run: sh installer/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi
+          path: dist/*.msi
+
+  release:
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -la files
+          # a release made by hand (with locally signed files) is left as it is
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists; its files are left alone"
+          else
+            gh release create "$TAG" files/* --draft --title "Oko ${TAG#v}" --generate-notes -R "$GITHUB_REPOSITORY"
+          fi

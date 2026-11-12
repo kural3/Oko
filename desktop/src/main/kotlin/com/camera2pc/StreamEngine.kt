@@ -57,6 +57,8 @@ class Settings {
     var saturation by mutableFloatStateOf(1f)   // 0..2
     /** Не гонять видео, пока камерой никто не пользуется и окно свёрнуто. */
     var powerSave by mutableStateOf(true)
+    /** Раз в запуск смотреть на GitHub, не вышла ли новая версия. */
+    var checkUpdates by mutableStateOf(true)
 
     init {
         runCatching {
@@ -73,6 +75,7 @@ class Settings {
             contrast = p.getProperty("contrast", "1").toFloatOrNull() ?: 1f
             saturation = p.getProperty("saturation", "1").toFloatOrNull() ?: 1f
             powerSave = p.getProperty("powerSave", "true") == "true"
+            checkUpdates = p.getProperty("checkUpdates", "true") == "true"
         }
     }
 
@@ -92,6 +95,7 @@ class Settings {
                 setProperty("contrast", contrast.toString())
                 setProperty("saturation", saturation.toString())
                 setProperty("powerSave", powerSave.toString())
+                setProperty("checkUpdates", checkUpdates.toString())
             }.let { p -> file.outputStream().use { p.store(it, "Oko") } }
         }
     }
@@ -144,6 +148,8 @@ class StreamEngine(val settings: Settings) {
     /** Настройки камеры телефона (ISO, выдержка, выбор камеры…). */
     val control = PhoneControl(scope)
     @Volatile private var socket: Socket? = null
+    /** Последняя ошибка в журнале — чтобы одна и та же не писалась каждые 2 секунды. */
+    @Volatile private var lastLogged = ""
 
     init {
         // Статус камеры обновляется и без трансляции
@@ -158,8 +164,9 @@ class StreamEngine(val settings: Settings) {
             while (isActive) {
                 delay(4000)
                 if (running && settings.mode == Mode.Usb && phase == Phase.Live && !viaCable) {
-                    val adb = findAdb() ?: continue
-                    if (runCatching { adbSerials(adb) }.getOrDefault(emptyList()).any(::isCable)) {
+                    val adb = Adb.find() ?: continue
+                    if (runCatching { adb.ready() }.getOrDefault(emptyList()).any { it.cable }) {
+                        Log.i("подключили кабель — переходим на него")
                         runCatching { socket?.close() }
                     }
                 }
@@ -174,6 +181,12 @@ class StreamEngine(val settings: Settings) {
         job = j
         // цикл завершился сам (например, не задан адрес) — кнопка снова «Подключить»
         j.invokeOnCompletion { if (job === j) job = null }
+    }
+
+    /** Выход из программы: связь рвём и свой сервер adb останавливаем. */
+    fun shutdown() {
+        stop()
+        Adb.shutdown()
     }
 
     fun stop() {
@@ -285,6 +298,10 @@ class StreamEngine(val settings: Settings) {
                 if (!coroutineContext.isActive) return
                 phase = Phase.Error
                 message = friendly(e)
+                if (message != lastLogged) {
+                    lastLogged = message
+                    Log.i("нет связи: $message" + if (message != e.message) " (${e})" else "")
+                }
                 fps = 0
                 mbps = 0f
             }
@@ -315,6 +332,8 @@ class StreamEngine(val settings: Settings) {
             }
             phase = Phase.Live
             message = "Подключено $link"
+            lastLogged = ""
+            Log.i("подключено $link, $host:$port")
 
             val renderer = FrameRenderer()
             var frames = 0
@@ -333,7 +352,10 @@ class StreamEngine(val settings: Settings) {
                     } else {
                         idleSince = 0L
                     }
-                    if (renderer.render(jpeg, (rotation + settings.rotate) % 360, settings)) frames++
+                    // Следующий кадр уже пришёл целиком — этот устарел: не тратим время на его
+                    // декодирование, иначе кадры копятся в буферах и картинка начинает отставать.
+                    val stale = input.available() >= jpeg.size
+                    if (!stale && renderer.render(jpeg, (rotation + settings.rotate) % 360, settings)) frames++
                     if (now - t0 >= 1_000_000_000L) {
                         val secs = (now - t0) / 1e9
                         fps = (frames / secs).toInt()
@@ -410,44 +432,35 @@ class StreamEngine(val settings: Settings) {
 
     // ---------------- adb ----------------
 
-    private fun run(vararg cmd: String, timeoutSec: Long = 15): Pair<Int, String> {
-        val p = ProcessBuilder(*cmd).redirectErrorStream(true).start()
-        val out = p.inputStream.bufferedReader().readText()
-        if (!p.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
-        return (runCatching { p.exitValue() }.getOrDefault(-1)) to out
-    }
-
-    /** Телефоны, которые видит adb (готовые к работе). */
-    private fun adbSerials(adb: String): List<String> =
-        run(adb, "devices").second.lines()
-            .map { it.trim() }
-            .filter { it.endsWith("\tdevice") }
-            .map { it.substringBefore('\t') }
-
-    /** Кабельный серийник — без адреса и без mDNS-имени беспроводной отладки. */
-    private fun isCable(serial: String) = ':' !in serial && "._adb-tls" !in serial && "._tcp" !in serial
-
-    /** Ищет телефоны с беспроводной отладкой в сети (mDNS) и подключается к ним. */
-    private fun mdnsConnect(adb: String): Boolean {
-        val services = run(adb, "mdns", "services").second.lines().filter { "_adb-tls-connect" in it }
-        var ok = false
-        for (line in services) {
-            val addr = line.trim().split(Regex("\\s+")).lastOrNull { ':' in it } ?: continue
-            if ("connected" in run(adb, "connect", addr).second) ok = true
-        }
-        return ok
-    }
-
     /** Пробрасывает порт телефона на 127.0.0.1. Возвращает true, если связь по кабелю. */
     private fun adbForward(port: Int): Boolean {
-        val adb = findAdb() ?: error("adb не найден")
+        val adb = Adb.find() ?: error("adb не найден — переустановите Oko")
         // Один телефон может числиться дважды (кабель + беспроводная отладка) — берём один:
         // сначала подключённый кабелем, иначе беспроводной.
-        var serials = adbSerials(adb)
-        if (serials.isEmpty() && mdnsConnect(adb)) serials = adbSerials(adb)
-        if (serials.isEmpty()) error("adb не видит телефон — включите на нём «Беспроводную отладку» (как — написано в Oko на телефоне)")
-        val serial = serials.firstOrNull(::isCable) ?: serials.first()
-        val (code, out) = run(adb, "-s", serial, "forward", "tcp:$port", "tcp:$port")
+        var all = adb.devices()
+        if (all.none { it.state == "device" } && adb.mdnsConnect()) all = adb.devices()
+        // подвисло (offline) — сначала пробуем переподключить сами
+        if (all.none { it.state == "device" } && all.any { it.state == "offline" }) {
+            adb.reconnectOffline()
+            Thread.sleep(2500)
+            all = adb.devices()
+        }
+        val ready = all.filter { it.state == "device" }
+        if (ready.isEmpty()) {
+            error(
+                when {
+                    all.any { it.state == "unauthorized" } ->
+                        "Разрешите отладку на телефоне: в окне «Разрешить отладку по USB?» нажмите «Разрешить»"
+                    all.any { it.state == "offline" } -> "Телефон не отвечает adb (offline) — переподключите кабель или выключите и включите отладку"
+                    Adb.usbDriverMissing() ->
+                        "Телефон подключён кабелем, но в Windows нет его драйвера ADB. Поставьте USB-драйвер " +
+                            "производителя (для Samsung — Samsung USB Driver) или подключайтесь по беспроводной отладке"
+                    else -> "adb не видит телефон — включите на нём «Беспроводную отладку» или отладку по USB (как — написано в Oko на телефоне)"
+                }
+            )
+        }
+        val dev = ready.firstOrNull { it.cable } ?: ready.first()
+        val (code, out) = adb.run("-s", dev.serial, "forward", "tcp:$port", "tcp:$port")
         if (code != 0) {
             error(
                 when {
@@ -456,7 +469,7 @@ class StreamEngine(val settings: Settings) {
                 }
             )
         }
-        return isCable(serial)
+        return dev.cable
     }
 
     /**
@@ -465,8 +478,8 @@ class StreamEngine(val settings: Settings) {
      */
     suspend fun pair(address: String, code: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val adb = findAdb() ?: error("adb не найден")
-            val (_, out) = run(adb, "pair", address.trim(), code.trim(), timeoutSec = 20)
+            val adb = Adb.find() ?: error("adb не найден — переустановите Oko")
+            val (_, out) = adb.run("pair", address.trim(), code.trim(), timeoutSec = 20)
             if ("Successfully paired" !in out) {
                 error(
                     when {
@@ -478,21 +491,12 @@ class StreamEngine(val settings: Settings) {
             }
             // после сопряжения adb обычно подключается сам; поможем ему
             repeat(5) {
-                if (adbSerials(adb).isNotEmpty()) return@runCatching "Телефон подключён"
-                mdnsConnect(adb)
+                if (adb.ready().isNotEmpty()) return@runCatching "Телефон подключён"
+                adb.mdnsConnect()
                 Thread.sleep(800)
             }
             "Сопряжение выполнено. Нажмите «Подключить»."
-        }
-    }
-
-    private fun findAdb(): String? {
-        val appDir = System.getProperty("compose.application.resources.dir")?.let { File(it) }
-        val candidates = listOfNotNull(
-            appDir?.resolve("platform-tools/adb.exe"),
-            System.getenv("LOCALAPPDATA")?.let { File(it, "Android/Sdk/platform-tools/adb.exe") },
-        ) + (System.getenv("PATH") ?: "").split(File.pathSeparator).map { File(it, "adb.exe") }
-        return candidates.firstOrNull { it.isFile }?.absolutePath
+        }.onFailure { Log.i("сопряжение: ${it.message}") }
     }
 
     // ---------------- кадр ----------------
