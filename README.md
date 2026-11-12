@@ -16,7 +16,7 @@ Your Android phone's camera as a webcam for Windows 11. It shows up as a camera 
 Take the newest files from [Releases](../../releases).
 
 - **Android**: `Oko-<version>.apk`. Android 7.0+.
-- **Windows**: `Oko-<version>-Windows.zip`. Windows 11 x64 (the virtual camera API is Windows 11 only). Unpack it and run `Установить.bat` (admin rights: the camera is registered for the whole system). `Удалить.bat` takes it all away again.
+- **Windows**: `Oko-<version>.msi`. Windows 11 x64 (the virtual camera API is Windows 11 only). It asks for admin rights, since the camera is registered for the whole system, and puts Oko in the Start menu and on the desktop. A newer `.msi` installs over an older one; Settings → Apps removes Oko along with the camera.
 
 Then open Oko on the phone, open Oko on the PC and press «Подключить». In your video call app pick the camera **Oko Camera**.
 
@@ -70,7 +70,7 @@ One Gradle build for both apps. Any JDK starts Gradle; the JDK 25 it builds with
 | `desktop/` | the Windows app: takes the stream, turns and colours the frame, writes it into the camera's shared memory; drives the phone's settings; pairs over adb |
 | `driver/` | the virtual camera: a Media Foundation media source DLL loaded by the Frame Server service, and `vcamctl.exe` to install, remove, list and test it |
 | `ui/` | Compose code both draw with: the theme (Pier.doon's scheme generator), icons, the logo, expressive pieces. Kotlin Multiplatform (Android + JVM) |
-| `installer/` | the install and uninstall scripts |
+| `installer/` | the MSI (WiX 3.11): `Oko.wxs`, the pictures for its pages (`Art.java`) and `build.sh` |
 | `docs/` | the README's pictures and the program that draws them (`Banners.java`) |
 
 ```
@@ -78,6 +78,7 @@ One Gradle build for both apps. Any JDK starts Gradle; the JDK 25 it builds with
 ./gradlew :desktop:run                    # start the Windows app
 ./gradlew :desktop:createDistributable    # the app folder for the installer
 sh driver/build.sh                        # Camera2PCCam.dll and vcamctl.exe, in dist/
+sh installer/build.sh                     # dist/Oko-<version>.msi (downloads WiX 3.11 if missing)
 ```
 
 The icon is drawn by `desktop/icons/Icon.java` (every PNG and the .ico); the Android adaptive icon is the same mark in vectors.

@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Oko installer (WiX 3.11): the app from :desktop:createDistributable (harvested into AppFiles by
+  heat, see build.sh), the camera DLL and vcamctl.exe. On install it registers the Oko Camera device,
+  on removal it takes the device away again; a newer version replaces an older one.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <Product Id="*" Name="Oko" Language="1049" Codepage="1251" Version="$(var.Version)" Manufacturer="Kurale"
+           UpgradeCode="d360165e-caf7-40d8-8d4b-d5a24c75c8b3">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" SummaryCodepage="1251"
+             Description="Oko: камера телефона как веб-камера" />
+
+    <MajorUpgrade Schedule="afterInstallInitialize" AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="Уже установлена более новая версия Oko." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <!-- Все файлы — только Oko: копируем всегда. Иначе при обновлении неизменившиеся файлы
+         считаются «уже на месте» и пропадают вместе со старой версией. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
+    <Property Id="OKOFOLDER" Secure="yes">
+      <RegistrySearch Id="Folder" Root="HKLM" Key="Software\Oko" Name="InstallFolder" Type="raw" Win64="yes" />
+    </Property>
+
+    <Condition Message="Oko нужна Windows 11: виртуальные камеры появились только в ней.">
+      <![CDATA[Installed OR VersionNT64 >= 603 AND WINDOWSBUILD >= 22000]]>
+    </Condition>
+    <Property Id="WINDOWSBUILD" Secure="yes">
+      <RegistrySearch Id="Build" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Win64="yes" />
+    </Property>
+
+    <Icon Id="oko.ico" SourceFile="$(var.Icon)" />
+    <Property Id="ARPPRODUCTICON" Value="oko.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/kural3/Oko" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/kural3/Oko" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Oko" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="Camera" Guid="4a8e2f61-93c7-4d05-b1e8-6c2d0f7a9b34" Win64="yes">
+        <File Id="CamDll" Source="$(var.Dist)\Camera2PCCam.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="CameraTool" Guid="c5d17b40-2e98-4f3a-a6c1-0b9e4d8f2a75" Win64="yes">
+        <File Id="Vcamctl" Source="$(var.Dist)\vcamctl.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="Cleanup" Guid="9b1f0c52-6a3e-4c1d-8e27-5f4a0d6b3c18" Win64="yes">
+        <RegistryValue Root="HKLM" Key="Software\Oko" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Oko" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" />
+        <!-- то, что оставила установка старыми скриптами -->
+        <RemoveFile Id="Leftovers" Name="*.ps1" On="both" />
+        <!-- при удалении папка уходит целиком, со всем, что осталось от прежних версий -->
+        <util:RemoveFolderEx On="uninstall" Property="OKOFOLDER" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Component Id="MenuShortcut" Guid="2c7e4a19-0d63-4f8b-b5a1-7e3c9d20f6a4" Win64="yes">
+        <Shortcut Id="MenuLnk" Name="Oko" Description="Камера телефона как веб-камера"
+                  Target="[INSTALLFOLDER]Oko.exe" WorkingDirectory="INSTALLFOLDER" Icon="oko.ico" />
+        <RegistryValue Root="HKLM" Key="Software\Oko" Name="MenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="6e0b8d37-4f12-4a9c-a3d6-1c5f7b2e8094" Win64="yes">
+        <Shortcut Id="DesktopLnk" Name="Oko" Description="Камера телефона как веб-камера"
+                  Target="[INSTALLFOLDER]Oko.exe" WorkingDirectory="INSTALLFOLDER" Icon="oko.ico" />
+        <RegistryValue Root="HKLM" Key="Software\Oko" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Main" Title="Oko" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="Camera" />
+      <ComponentRef Id="CameraTool" />
+      <ComponentRef Id="Cleanup" />
+      <ComponentRef Id="MenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+
+    <!-- запущенный Oko закрываем, чтобы файлы не были заняты -->
+    <util:CloseApplication Id="CloseOko" Target="Oko.exe" CloseMessage="yes" TerminateProcess="0" RebootPrompt="no" />
+
+    <!-- Камера. Отложенные действия от имени системы: регистрация пишет в HKLM. -->
+    <CustomAction Id="PreClean_Set" Property="PreClean"
+                  Value="&quot;[System64Folder]cmd.exe&quot; /s /c &quot;if exist &quot;[INSTALLFOLDER]vcamctl.exe&quot; &quot;[INSTALLFOLDER]vcamctl.exe&quot; uninstall &quot;[INSTALLFOLDER]Camera2PCCam.dll&quot; &amp; &quot;[System64Folder]net.exe&quot; stop FrameServer /y&quot;" />
+    <CustomAction Id="PreClean" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <CustomAction Id="RegisterCam_Set" Property="RegisterCam"
+                  Value="&quot;[INSTALLFOLDER]vcamctl.exe&quot; install &quot;[INSTALLFOLDER]Camera2PCCam.dll&quot;" />
+    <CustomAction Id="RegisterCam" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="check" />
+
+    <CustomAction Id="UnregisterCam_Set" Property="UnregisterCam"
+                  Value="&quot;[System64Folder]cmd.exe&quot; /s /c &quot;&quot;[INSTALLFOLDER]vcamctl.exe&quot; uninstall &quot;[INSTALLFOLDER]Camera2PCCam.dll&quot; &amp; &quot;[System64Folder]net.exe&quot; stop FrameServer /y&quot;" />
+    <CustomAction Id="UnregisterCam" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="UnregisterCam_Set" Before="UnregisterCam">REMOVE~="ALL"</Custom>
+      <Custom Action="UnregisterCam" Before="RemoveFiles">REMOVE~="ALL"</Custom>
+      <Custom Action="PreClean_Set" Before="PreClean">NOT Installed AND NOT REMOVE</Custom>
+      <Custom Action="PreClean" Before="InstallFiles">NOT Installed AND NOT REMOVE</Custom>
+      <Custom Action="RegisterCam_Set" Before="RegisterCam">NOT REMOVE~="ALL"</Custom>
+      <Custom Action="RegisterCam" After="InstallFiles">NOT REMOVE~="ALL"</Custom>
+    </InstallExecuteSequence>
+
+    <!-- Мастер: приветствие → папка → установка → готово (с галочкой «Запустить Oko») -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.Art)\dialog.bmp" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.Art)\banner.bmp" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Запустить Oko" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <SetProperty Id="WixShellExecTarget" Value="[INSTALLFOLDER]Oko.exe" After="CostFinalize" Sequence="ui" />
+    <CustomAction Id="LaunchApp" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" Return="ignore" />
+    <UI>
+      <UIRef Id="WixUI_InstallDir" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="2">1</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2">1</Publish>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed</Publish>
+    </UI>
+  </Product>
+</Wix>

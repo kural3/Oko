@@ -1,0 +1,28 @@
+// Version info for Camera2PCCam.dll and vcamctl.exe, so the installer replaces them on update.
+// VER and VER_STR come from ver.h, NAME from the command line; build.sh makes both.
+#include <winver.h>
+#include "ver.h"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION VER
+PRODUCTVERSION VER
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Kurale"
+      VALUE "FileDescription", NAME
+      VALUE "FileVersion", VER_STR
+      VALUE "ProductName", "Oko"
+      VALUE "ProductVersion", VER_STR
+      VALUE "LegalCopyright", "GPL-3.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
